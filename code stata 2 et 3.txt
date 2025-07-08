@@ -1,0 +1,241 @@
+* ==============================================================================
+* TRANSCRIPTION DU CODE R EN STATA
+* ==============================================================================
+
+* Chargement des données (à adapter selon votre fichier)
+* use "votre_fichier.dta", clear
+
+* ==============================================================================
+* 2. ATTRIBUTION DES DISCRIMINATIONS
+* ==============================================================================
+
+* ==============================================================================
+* a. Fréquences pondérées par génération et n non-pondéré
+* ==============================================================================
+
+* Filtrer pour ne garder que le G1 et les G2 (retirer popu sans ascendance migratoire)
+keep if origine_tous_g2bis != 1
+
+* Création variable generation_4 (avec G2.5)
+gen generation_4 = .
+replace generation_4 = 1 if group1 == 5
+replace generation_4 = 2 if group1 == 1 | group1 == 2  // G1
+replace generation_4 = 3 if group2 == 31 | group2 == 41  // G2
+replace generation_4 = 4 if group2 == 32 | group2 == 33 | group2 == 42 | group2 == 43  // G2.5
+
+* Variables de discrimination à traiter
+local variables_discri "d_pqdisc_a d_pqdisc_b d_pqdisc_c d_pqdisc_d d_pqdisc_e d_pqdisc_f d_pqdisc_g d_pqdisc_h d_pqdisc_i d_pqdisc_j d_pqdisc_k d_pqdisc_l d_pqdisc_m"
+
+* Labels correspondants
+local labels_discri `""Age" "Sexe" "Health/Disability" "Skin color" "Origins/Nationality" "Neighbourhood reputation/where you live" "Accent/Way of speaking" "Family situation" "Sexuality" "Religion" "Clothes" "Weight" "Other""'
+
+* Créer un fichier temporaire pour stocker les résultats
+tempfile tableau_final
+postfile results str50 variable pct_G1 pct_G2 pct_G2_5 n_G1 n_G2 n_G2_5 p_value str5 significance using `tableau_final'
+
+* Boucle principale
+local i = 1
+foreach var of local variables_discri {
+    local label_var : word `i' of `labels_discri'
+    
+    capture {
+        * Table des effectifs non pondérés (modalité = 1 uniquement)
+        tab `var' generation_4 if `var' == 1, matcell(table_n)
+        
+        * Table pondérée avec pourcentages
+        tab `var' generation_4 [fw=poidsi] if `var' == 1, col nofreq matcell(table_w) matcol(col_names)
+        
+        * Récupération des pourcentages pour modalité = 1
+        qui tab `var' generation_4 [fw=poidsi], col
+        matrix pct_matrix = r(C)
+        
+        * Extraction des valeurs pour génération 2, 3, 4 (lignes correspondant à var=1)
+        scalar pct_G1 = pct_matrix[2,2] * 100
+        scalar pct_G2 = pct_matrix[2,3] * 100  
+        scalar pct_G2_5 = pct_matrix[2,4] * 100
+        
+        * Effectifs non pondérés pour modalité = 1
+        qui tab generation_4 if `var' == 1
+        matrix n_matrix = r(C)
+        scalar n_G1 = n_matrix[1,2]
+        scalar n_G2 = n_matrix[1,3]
+        scalar n_G2_5 = n_matrix[1,4]
+        
+        * Test du chi²
+        qui tab `var' generation_4, chi2
+        scalar p_val = r(p)
+        
+        * Système d'étoiles
+        local stars = ""
+        if p_val < 0.001 {
+            local stars = "***"
+        }
+        else if p_val < 0.01 {
+            local stars = "**"
+        }
+        else if p_val < 0.05 {
+            local stars = "*"
+        }
+        else if p_val < 0.1 {
+            local stars = "."
+        }
+        
+        * Post des résultats
+        post results ("`label_var'") (pct_G1) (pct_G2) (pct_G2_5) (n_G1) (n_G2) (n_G2_5) (p_val) ("`stars'")
+    }
+    
+    local i = `i' + 1
+}
+
+postclose results
+use `tableau_final', clear
+
+* Affichage et export
+list
+export delimited using "table_discrimination_types.csv", replace
+
+* ==============================================================================
+* b. Nombre attribution + tableau associé  
+* ==============================================================================
+
+* Création d'une variable qui compte le nombre d'attributions
+gen Total_attributions = d_pqdisc_a + d_pqdisc_b + d_pqdisc_c + d_pqdisc_d + d_pqdisc_e + d_pqdisc_f + d_pqdisc_g + d_pqdisc_h + d_pqdisc_i + d_pqdisc_j + d_pqdisc_k + d_pqdisc_l + d_pqdisc_m
+
+gen Nombre_attributions = 0
+replace Nombre_attributions = 1 if Total_attributions == 1  // 1 raison
+replace Nombre_attributions = 2 if Total_attributions > 1   // 2 raisons ou +
+
+* Variables à analyser
+local var_list "sexee generation_4 origine_tous_g2bis"
+local var_labels `""Gender" "Generation (G1/G2/G2_5)" "Origin""'
+
+* Boucle sur les variables
+local j = 1
+foreach var of local var_list {
+    local var_label : word `j' of `var_labels'
+    
+    display "Résultats pour : `var_label'"
+    
+    * Table pondérée avec pourcentages
+    tab `var' Nombre_attributions [fw=poidsi], col
+    
+    * Table des effectifs non pondérés
+    tab `var' Nombre_attributions
+    
+    * Test chi² classique
+    qui tab `var' Nombre_attributions, chi2
+    local p_value = r(p)
+    
+    * Système d'étoiles
+    local stars = ""
+    if `p_value' < 0.001 {
+        local stars = "***"
+    }
+    else if `p_value' < 0.01 {
+        local stars = "**"
+    }
+    else if `p_value' < 0.05 {
+        local stars = "*"
+    }
+    else if `p_value' < 0.1 {
+        local stars = "."
+    }
+    
+    display "Chi² p-value: `p_value' `stars'"
+    display ""
+    
+    local j = `j' + 1
+}
+
+* ==============================================================================
+* 3. RACISME
+* ==============================================================================
+
+* Attribution ethnoraciale: création des variables
+gen attri_ethnorac = 0
+replace attri_ethnorac = 1 if d_pqdisc_d == 1 | d_pqdisc_e == 1
+
+* Autre attribution ethnoraciale (quartier/accent)
+gen attri_ethnorac_other = 0
+replace attri_ethnorac_other = 1 if d_pqdisc_f == 1 | d_pqdisc_g == 1
+
+* Attribution religion
+gen attri_relig = 0
+replace attri_relig = 1 if d_pqdisc_j == 1
+
+* Attribution genre
+gen attri_gender = 0
+replace attri_gender = 1 if d_pqdisc_b == 1
+
+* Autre
+gen attri_other = 0
+replace attri_other = 1 if d_pqdisc_a == 1 | d_pqdisc_c == 1 | d_pqdisc_h == 1 | d_pqdisc_i == 1 | d_pqdisc_k == 1 | d_pqdisc_l == 1 | d_pqdisc_m == 1
+
+* Recode f_dip en 3 niveaux
+gen dip_rec = 1  // <BAC par défaut
+replace dip_rec = 2 if inrange(f_dip, 5, 6)  // BAC
+replace dip_rec = 3 if inrange(f_dip, 7, 8)  // >BAC
+
+label define dip_rec_lbl 1 "<BAC" 2 "BAC" 3 ">BAC"
+label values dip_rec dip_rec_lbl
+
+* PCS 2 positions au lieu de 4 (extraction des deux premiers)
+gen cs_ego = real(substr(string(pcs_act), 1, 2))
+replace cs_ego = . if inlist(cs_ego, 0, 20, 30, 40, 50, 60)
+
+* Recodage final des classes sociales
+gen classesoc = 1  // Inactifs par défaut
+replace classesoc = 11 if inlist(cs_ego, 23, 31, 37, 38)  // Clsup-Eco
+replace classesoc = 12 if inlist(cs_ego, 33, 34, 35)      // Clsup-Cul
+replace classesoc = 21 if inlist(cs_ego, 12, 13, 21, 22, 47, 48) | (inlist(cs_ego, 53, 55) & csnq_ego == 50)  // Clmoy-Eco
+replace classesoc = 22 if inlist(cs_ego, 42, 43, 44, 45, 46) | (inlist(cs_ego, 52, 54, 56) & csnq_ego == 50)  // Clmoy-Cul
+replace classesoc = 31 if inlist(csnq_ego, 51, 60, 61) | cs_ego == 11  // Clpop
+
+label define classesoc_lbl 11 "Clsup-Eco" 12 "Clsup-Cul" 21 "Clmoy-Eco" 22 "Clmoy-Cul" 31 "Clpop" 1 "Inactifs"
+label values classesoc classesoc_lbl
+
+* Variables individuelles et variables d'attribution
+local individus "sexee generation_4 origine_tous_g2bis dip_rec classesoc"
+local variables "attri_ethnorac attri_ethnorac_other attri_relig attri_gender attri_other"
+
+* Création des tableaux croisés
+foreach indiv_var of local individus {
+    display ""
+    display "=== Analyse pour `indiv_var' ==="
+    
+    foreach var of local variables {
+        display ""
+        display "Variable: `var'"
+        
+        * Table pondérée avec pourcentages en ligne
+        tab `indiv_var' `var' [fw=poidsi], row
+        
+        * Table des effectifs non pondérés  
+        tab `indiv_var' `var'
+        
+        * Test du chi²
+        qui tab `indiv_var' `var', chi2
+        local p_value = r(p)
+        
+        local stars = ""
+        if `p_value' < 0.001 {
+            local stars = "***"
+        }
+        else if `p_value' < 0.01 {
+            local stars = "**"
+        }
+        else if `p_value' < 0.05 {
+            local stars = "*"
+        }
+        else if `p_value' < 0.1 {
+            local stars = "."
+        }
+        
+        display "Chi² p-value: `p_value' `stars'"
+    }
+}
+
+* ==============================================================================
+* 4. COMBINAISONS D'ATTRIBUTIONS INTER- / INTRA-CATÉGORIES
+* ==============================================================================
+* (Section à compléter selon les besoins spécifiques)
